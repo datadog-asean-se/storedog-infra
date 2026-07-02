@@ -1,0 +1,51 @@
+# OPTIONAL: generates synthetic RUM sessions against the storefront. Not required
+# for the ADLC demo flow; enable if you want live RUM data during the walkthrough.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fake-traffic
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: puppeteer
+  namespace: fake-traffic
+  labels:
+    app: puppeteer
+    team: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: puppeteer
+  template:
+    metadata:
+      labels:
+        app: puppeteer
+        team: frontend
+    spec:
+      containers:
+        - name: puppeteer
+          image: ghcr.io/datadog/storedog/puppeteer:latest
+          env:
+            - name: STOREDOG_URL
+              value: "http://service-proxy.storedog.svc.cluster.local"
+            - name: PUPPETEER_TIMEOUT
+              value: "30000"
+            - name: SKIP_SESSION_CLOSE
+              value: "false"
+          resources:
+            requests: { memory: "1Gi", cpu: "250m" }
+            limits: { memory: "2Gi", cpu: "500m" }
+          securityContext:
+            capabilities:
+              add:
+                - SYS_ADMIN # required for Puppeteer to run in Docker
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi

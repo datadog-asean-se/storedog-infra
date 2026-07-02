@@ -1,0 +1,26 @@
+# The `discounts` service as an Argo Rollout + its Deployment Gate AnalysisTemplate.
+# Kept as a SEPARATE Application from app-storedog.yaml so you can install the Argo
+# Rollouts CRDs/controller first, then bring this one up - avoids "no matches for
+# kind Rollout" errors on first sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: storedog-rollouts
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/datadog-asean-se/storedog-infra.git
+    targetRevision: main
+    path: rollouts
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: storedog
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

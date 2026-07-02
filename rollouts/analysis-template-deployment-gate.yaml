@@ -1,0 +1,77 @@
+# Argo Rollouts AnalysisTemplate that calls a Datadog Deployment Gate via datadog-ci.
+#
+# Uses the JIT (Just-In-Time) evaluation mode with a `faulty_deployment_detection`
+# rule - no Datadog-side setup required. The gate compares the newly deployed
+# `version` against previous versions using Watchdog APM Faulty Deployment Detection.
+# If a regression is detected the `datadog-ci deployment gate` command exits non-zero,
+# the Job fails, the AnalysisRun reports Failed, and Argo Rollouts aborts + rolls back.
+#
+# Docs: https://docs.datadoghq.com/deployment_gates/setup/jit/  (Argo Rollouts tab)
+#
+# Prereq secret in the storedog namespace (never commit real keys):
+#   kubectl -n storedog create secret generic datadog-ci-keys \
+#     --from-literal DD_API_KEY="$DD_API_KEY" --from-literal DD_APP_KEY="$DD_APP_KEY"
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: datadog-deployment-gate
+  namespace: storedog
+spec:
+  args:
+    - name: service
+    - name: env
+    - name: version
+  metrics:
+    - name: datadog-deployment-gate
+      # A single Job whose success/failure IS the gate result.
+      failureLimit: 0
+      provider:
+        job:
+          spec:
+            backoffLimit: 0 # do not retry a failed gate evaluation
+            ttlSecondsAfterFinished: 300
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: datadog-ci
+                    image: datadog/ci:v2
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - >
+                        datadog-ci deployment gate
+                        --service "{{args.service}}"
+                        --env "{{args.env}}"
+                        --version "{{args.version}}"
+                        --config /config/gate-config.json
+                    env:
+                      - name: DD_SITE
+                        value: datadoghq.com
+                      - name: DD_API_KEY
+                        valueFrom:
+                          secretKeyRef: { name: datadog-ci-keys, key: DD_API_KEY }
+                      - name: DD_APP_KEY
+                        valueFrom:
+                          secretKeyRef: { name: datadog-ci-keys, key: DD_APP_KEY }
+                    volumeMounts:
+                      - name: gate-config
+                        mountPath: /config
+                volumes:
+                  - name: gate-config
+                    configMap:
+                      name: datadog-gate-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: datadog-gate-config
+  namespace: storedog
+data:
+  gate-config.json: |
+    {
+      "rules": [
+        {
+          "type": "faulty_deployment_detection"
+        }
+      ]
+    }

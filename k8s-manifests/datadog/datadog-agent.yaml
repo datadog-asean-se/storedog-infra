@@ -1,0 +1,51 @@
+# Datadog Agent via the Datadog Operator (v2alpha1), adapted for GKE.
+#
+# Differs from storedog's stock k8s-manifests/datadog/datadog-agent.yaml:
+#   - Removes the kubeadm control-plane tolerations + etcd integration (GKE's
+#     control plane is Google-managed and not schedulable).
+#   - Explicitly ENABLES APM (required so Watchdog APM Faulty Deployment Detection
+#     has traces to analyze for the Deployment Gate).
+#   - Enables USM, process + orchestrator, and container image collection (SBOM).
+#
+# Prereq secret (never commit real keys - see datadog-secret.example.yaml):
+#   kubectl -n datadog create secret generic datadog-secret \
+#     --from-literal api-key=$DD_API_KEY --from-literal app-key=$DD_APP_KEY
+apiVersion: datadoghq.com/v2alpha1
+kind: DatadogAgent
+metadata:
+  name: datadog
+  namespace: datadog
+spec:
+  global:
+    clusterName: storedog-adlc-demo
+    site: datadoghq.com
+    credentials:
+      apiSecret:
+        secretName: datadog-secret
+        keyName: api-key
+      appSecret:
+        secretName: datadog-secret
+        keyName: app-key
+    tags:
+      - "env:demo"
+  features:
+    apm:
+      enabled: true
+      # Unix Domain Socket - matches storedog deployments that mount /var/run/datadog.
+      unixDomainSocketConfig:
+        enabled: true
+    usm:
+      enabled: true
+    logCollection:
+      enabled: true
+      containerCollectAll: true
+    liveProcessCollection:
+      enabled: true
+    orchestratorExplorer:
+      enabled: true
+    clusterChecks:
+      enabled: true
+    sbom:
+      enabled: true
+      containerImage:
+        enabled: true

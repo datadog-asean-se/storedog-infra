@@ -1,0 +1,80 @@
+# service-proxy (nginx). Service stays ClusterIP - NEVER expose this via a public
+# LoadBalancer/Ingress (org policy: no 0.0.0.0/0 firewall rules). Reach it with
+# `kubectl -n storedog port-forward svc/service-proxy 8088:80` (see scripts/port-forward.sh).
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-proxy
+  namespace: storedog
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
+  selector:
+    app: service-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-proxy
+  namespace: storedog
+  labels:
+    app: service-proxy
+    team: edge
+    tags.datadoghq.com/service: service-proxy
+    tags.datadoghq.com/version: "1.28.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-proxy
+  template:
+    metadata:
+      labels:
+        app: service-proxy
+        team: edge
+        tags.datadoghq.com/service: service-proxy
+        tags.datadoghq.com/version: "1.28.0"
+      annotations:
+        ad.datadoghq.com/service-proxy.logs: '[{"source": "nginx"}]'
+        ad.datadoghq.com/service-proxy.checks: |
+          {
+            "nginx": {
+              "init_config": {},
+              "instances": [{"nginx_status_url": "http://%%host%%:81/nginx_status/"}]
+            }
+          }
+    spec:
+      # NOTE: hostNetwork matches upstream storedog; it does NOT expose the pod
+      # externally on GKE with private nodes. We only ever reach it via
+      # `kubectl port-forward` against the ClusterIP Service above.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      volumes:
+        - name: apmsocketpath
+          hostPath:
+            path: /var/run/datadog/
+      containers:
+        - name: service-proxy
+          image: ghcr.io/datadog/storedog/nginx:latest
+          ports:
+            - containerPort: 80
+          env:
+            - name: NGINX_RESOLVER
+              value: "kube-dns.kube-system.svc.cluster.local"
+            - name: DD_ENV
+              valueFrom: { configMapKeyRef: { name: storedog-config, key: DD_ENV } }
+            - name: DD_SERVICE
+              value: service-proxy
+            - name: DD_VERSION
+              value: "1.28.0"
+            - name: DD_TRACE_AGENT_URL
+              value: 'unix:///var/run/datadog/apm.socket'
+          resources:
+            requests: { memory: "128Mi", cpu: "100m" }
+            limits: { memory: "256Mi", cpu: "200m" }
+          volumeMounts:
+            - name: apmsocketpath
+              mountPath: /var/run/datadog

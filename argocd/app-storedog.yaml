@@ -1,0 +1,28 @@
+# Core storedog app (namespace, config, secrets stubs, Datadog agent CR, base
+# Deployments/StatefulSets). Everything EXCEPT `discounts`, which is managed as an
+# Argo Rollout by app-storedog-rollouts.yaml so it can canary + gate.
+#
+# Update spec.source.repoURL below to point at YOUR fork/clone of this repo if you
+# don't have push access to datadog-asean-se/storedog-infra.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: storedog-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/datadog-asean-se/storedog-infra.git
+    targetRevision: main
+    path: k8s-manifests
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: storedog
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
