@@ -55,6 +55,12 @@ spec:
               valueFrom: { configMapKeyRef: { name: storedog-config, key: POSTGRES_USER } }
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: storedog-secrets, key: POSTGRES_PASSWORD } }
+            # GCE PD-backed PersistentVolumes always contain a `lost+found` directory at
+            # the mount root, which makes `initdb` refuse to initialize (it requires an
+            # empty directory). Point PGDATA at a subdirectory of the mount instead -
+            # this is the standard fix documented on the postgres Docker Hub image page.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
