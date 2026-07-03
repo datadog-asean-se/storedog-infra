@@ -26,6 +26,13 @@ available JIT inline configuration" approach Datadog shipped for Deployment Gate
 commit the rules as code (in the ConfigMap below) and Datadog evaluates them
 per-deployment, with no Datadog-side object required beforehand.
 
+Deployment Gates are a Preview feature on most Datadog sites (per the
+[setup docs](https://docs.datadoghq.com/deployment_gates/setup/)), which normally
+means requesting Preview access before a gate evaluation will work. **For this
+demo's Datadog org, Preview access has been confirmed enabled** by the demo owner -
+this is not something that still needs checking before presenting. If you're
+re-running this demo against a different org, confirm Preview access there first.
+
 ## The ConfigMap + `ClusterAnalysisTemplate` pattern used here
 
 Datadog's own Argo Rollouts integration guide ([JIT setup docs, Argo Rollouts
@@ -140,13 +147,15 @@ Per the [JIT rule-types docs](https://docs.datadoghq.com/deployment_gates/setup/
   env var + the image tag together, so Faulty Deployment Detection sees each demo run
   as a genuinely new version).
 - `options` fields for this rule type:
-  - `duration` (optional): length of the analysis window in seconds. The docs
-    recommend **at least 900s (15 minutes)** "for optimal analysis confidence"; the
-    max is 7200s (2 hours). **This repo uses `duration: 300`** (5 minutes) purely to
-    keep the live demo short - the injected fault
-    (`buggy-image/`, ~40% error rate / ~600ms latency vs. ~0%/~5ms clean) is severe
-    enough to trip detection well inside a short window. **For a real production
-    gate, use >=900s.**
+  - `duration` (optional): length of the analysis window in seconds. Datadog's
+    general recommendation for production use is **at least 900s (15 minutes)**
+    "for optimal analysis confidence"; the max is 7200s (2 hours). **This repo
+    deliberately uses `duration: 300`** (5 minutes) to keep the live demo short -
+    the injected fault (`buggy-image/`, ~40% error rate / ~600ms latency vs.
+    ~0%/~5ms clean) is severe enough to trip detection well inside a short window.
+    This trade-off has been reviewed and confirmed acceptable by the demo owner
+    for this demo specifically - it is not an open question. **For a real
+    production gate, still use >=900s.**
   - `included_resources` (optional): if set, only these APM resources are analyzed.
   - `excluded_resources` (optional): APM resources to ignore (e.g. low-value or noisy
     endpoints like health checks), so they don't generate false positives/negatives.
