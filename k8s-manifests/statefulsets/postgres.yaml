@@ -62,6 +62,12 @@ spec:
               valueFrom: { configMapKeyRef: { name: storedog-config, key: POSTGRES_USER } }
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: storedog-secrets, key: POSTGRES_PASSWORD } }
+            # Without POSTGRES_DB, the postgres image's initdb only creates a
+            # database matching POSTGRES_USER ("postgres"), not the "storedog_db"
+            # the Rails/Spree app actually connects to - found live as
+            # "FATAL: database storedog_db does not exist" in backend/worker logs.
+            - name: POSTGRES_DB
+              valueFrom: { configMapKeyRef: { name: storedog-config, key: POSTGRES_DB } }
             # GCE PD-backed PersistentVolumes always contain a `lost+found` directory at
             # the mount root, which makes `initdb` refuse to initialize (it requires an
             # empty directory). Point PGDATA at a subdirectory of the mount instead -
