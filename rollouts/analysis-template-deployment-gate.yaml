@@ -35,7 +35,9 @@ spec:
                 restartPolicy: Never
                 containers:
                   - name: datadog-ci
-                    image: datadog/ci:v2
+                    # Verified against Docker Hub (2026-07-03): only `latest` and
+                    # `vX.Y.Z` tags exist (e.g. v5.20.1) - there is no `v2` tag.
+                    image: datadog/ci:latest
                     command: ["/bin/sh", "-c"]
                     args:
                       - >
