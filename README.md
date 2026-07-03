@@ -202,6 +202,11 @@ steps - is documented in full in
 that before changing `rollouts/deployment-gate-cluster-analysis-template.yaml` or
 adapting this pattern for another service.
 
+> **Known gap:** the gate's PASS→promote path is proven live; FAIL→rollback is
+> not, as of the last live test. See the "Known gap" callout at the top of
+> [`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md) before
+> relying on the FAIL path for a live demo.
+
 ## Datadog integrations for the CI/CD stack
 
 Beyond the Deployment Gate (which talks to the Datadog API directly via
@@ -230,6 +235,24 @@ cd terraform && terraform destroy   # tears down the whole ephemeral cluster
 
 The cluster has `deletion_protection = false` specifically so this is a one-command
 teardown - don't reuse this project/cluster for anything you need to persist.
+
+**Check for orphaned disks after destroying.** Found live: `terraform destroy`
+deletes the GKE cluster directly, without Kubernetes ever getting a chance to run
+its normal PVC-reclaim logic - so the GCE persistent disks backing `postgres-data`,
+`postgres-logs`, and `redis-data` (created dynamically by the `standard-rwo`
+StorageClass) are orphaned rather than deleted, and will keep billing. After
+`terraform destroy`, check for and clean up leftovers:
+
+```bash
+gcloud compute disks list --project datadog-ese-sandbox \
+  --filter="labels.goog-k8s-cluster-name=storedog-adlc-demo"
+# delete any disks it returns (they'll show no `users` since the cluster is gone):
+gcloud compute disks delete <disk-name> --zone asia-southeast1-a --project datadog-ese-sandbox
+```
+
+This is a shared GCP project - double-check the `goog-k8s-cluster-name` label
+before deleting anything, since other unrelated clusters' disks live in the same
+project/zone.
 
 ## Troubleshooting
 

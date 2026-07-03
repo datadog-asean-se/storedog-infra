@@ -4,6 +4,37 @@ This document walks through the Datadog **Deployment Gate** used by
 `rollouts/discounts-rollout.yaml`, why it's implemented the way it is, and how to
 adapt it for your own service.
 
+> ## ⚠️ Known gap: gate FAIL→rollback has not been reproduced live
+>
+> The PASS→promote path is fully proven live (real evaluation IDs, real API
+> confirmation, real promotion to `setWeight: 100`). The **FAIL→rollback** path is
+> not: across 7 live attempts against this demo's Datadog org - spanning a 300s and
+> a 900s analysis window, 25%-50%/600ms and 90%/5000ms fault severity, and both
+> the default puppeteer traffic and a dedicated sequential load generator - the
+> gate **passed every time**, even against a canary serving ~90% real HTTP 500s.
+>
+> The most likely explanation: `store-discounts`'s APM trace sampling/ingestion in
+> this org may be too low for Watchdog to accumulate enough **error span** volume
+> to reach a confident verdict. This is suspected, not confirmed - the Datadog
+> Spans Analytics API consistently showed almost no indexed error spans for this
+> service even when the load generator's own client-side logs showed dozens of
+> confirmed real 500 responses, which points at a sampling/retention gap between
+> "requests actually happening" and what's indexed for search (and, presumably,
+> what Watchdog draws on).
+>
+> **Before presenting the FAIL path live, check:**
+> - The Datadog UI's APM service settings for `store-discounts` (ingestion
+>   controls / retention filters / trace sampling rate).
+> - Whether `store-discounts` traces are being sampled at a materially lower rate
+>   than other storedog services.
+> - Consider asking Datadog support directly if the above doesn't explain it -
+>   this may be specific to how Faulty Deployment Detection sources its signal
+>   rather than anything wrong with this repo's gate configuration, which was
+>   independently verified correct (`ClusterAnalysisTemplate` schema, `datadog-ci`
+>   invocation, real evaluation IDs returned and polled successfully every time).
+>
+> If you resolve this, please update this note with what fixed it.
+
 ## What a Deployment Gate is
 
 A Deployment Gate is a Datadog check that runs *during* a deployment and returns
