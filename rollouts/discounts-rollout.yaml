@@ -18,7 +18,7 @@ metadata:
     team: discounts
     tags.datadoghq.com/service: store-discounts
     tags.datadoghq.com/env: demo
-    tags.datadoghq.com/version: "good-20260703150317"
+    tags.datadoghq.com/version: "bad-20260703151044"
 spec:
   replicas: 3
   revisionHistoryLimit: 3
@@ -56,7 +56,7 @@ spec:
         team: discounts
         tags.datadoghq.com/service: store-discounts
         tags.datadoghq.com/env: demo
-        tags.datadoghq.com/version: "good-20260703150317"
+        tags.datadoghq.com/version: "bad-20260703151044"
       annotations:
         ad.datadoghq.com/discounts.logs: '[{"source": "python"}]'
     spec:
@@ -74,7 +74,7 @@ spec:
           # envsubst at sync time). scripts/rollout-bad.sh / rollout-good.sh rewrite
           # this line (and the version label/env above) and push a commit; ArgoCD
           # syncs the change and Argo Rollouts runs the canary + Deployment Gate.
-          image: asia-southeast1-docker.pkg.dev/datadog-ese-sandbox/storedog/discounts:good
+          image: asia-southeast1-docker.pkg.dev/datadog-ese-sandbox/storedog/discounts:buggy
           # rollout-bad.sh/rollout-good.sh reuse mutable tags (:buggy, :good) across
           # demo runs so an SE can rebuild-and-repush without editing this file's tag
           # string. With the default `IfNotPresent`, a node that already cached an
@@ -101,7 +101,7 @@ spec:
             - name: DD_SERVICE
               value: store-discounts
             - name: DD_VERSION
-              value: "good-20260703150317"
+              value: "bad-20260703151044"
             - name: DD_RUNTIME_METRICS_ENABLED
               value: "true"
             - name: DD_PROFILING_ENABLED
