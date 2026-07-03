@@ -44,6 +44,13 @@ spec:
             }
           }
     spec:
+      # ghcr.io/datadog/storedog/postgres runs as the Alpine `postgres` user
+      # (uid=70, gid=70 - verified via `docker run --entrypoint id`), not the
+      # Debian postgres image's usual uid/gid 999. Without fsGroup, the
+      # postgres-logs PVC mounts owned by root and postgres fails to start with
+      # "could not open log file ...: Permission denied".
+      securityContext:
+        fsGroup: 70
       containers:
         - name: postgres
           image: ghcr.io/datadog/storedog/postgres:latest
