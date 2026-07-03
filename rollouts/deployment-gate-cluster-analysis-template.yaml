@@ -1,0 +1,120 @@
+# Datadog Deployment Gate for the storedog `discounts` service - JIT (Just-In-Time)
+# rules, no gate pre-created in Datadog - implemented as a `ClusterAnalysisTemplate`.
+#
+# Docs:
+#   - https://docs.datadoghq.com/deployment_gates/setup/jit/?tab=argorollouts (Argo Rollouts tab)
+#   - https://docs.datadoghq.com/deployment_gates/setup/
+# See also: rollouts/deployment-gates-guide.md for a full annotated walkthrough.
+#
+# Why ClusterAnalysisTemplate (not the namespace-scoped AnalysisTemplate this repo
+# used previously):
+#   - Datadog's own Argo Rollouts JIT example ships the gate as a ClusterAnalysisTemplate
+#     precisely so one gate policy can be referenced by any Rollout, in any namespace,
+#     without redefining it per-namespace.
+#   - Referencing a ClusterAnalysisTemplate from a Rollout's `analysis.templates[]`
+#     requires `clusterScope: true` on that template reference (see
+#     rollouts/discounts-rollout.yaml). Verified against the live Argo Rollouts CRD:
+#     `argoproj.io/v1alpha1` `Rollout` -> `spec.strategy.canary.steps[].analysis.
+#     templates[].clusterScope` (boolean) - pulled from
+#     https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+#     - and the `clusteranalysistemplates.argoproj.io` CRD is present in that same
+#     install manifest, confirming `ClusterAnalysisTemplate` is a real, current kind.
+#
+# Note on scope: only the *template* is cluster-scoped. The AnalysisRun it spawns (and
+# the Job the AnalysisRun creates) still run in the Rollout's own namespace (`storedog`
+# here), so the ConfigMap and Secret referenced below stay namespace-scoped and must
+# exist in `storedog` - unchanged from before.
+#
+# Rule type `faulty_deployment_detection` (verified current type string and field set
+# against the JIT docs' "APM Faulty Deployment Detection" tab, fetched 2026-07-03):
+# compares the newly deployed `version` against prior versions of the same service
+# using Watchdog APM analysis - no prior Datadog-side gate setup required for
+# APM-instrumented services. `options` fields per the docs:
+#   - duration (optional): analysis window in seconds. Docs recommend >=900 (15 min)
+#     "for optimal analysis confidence"; max is 7200. This demo config uses a shorter
+#     window (see the ConfigMap below) because the injected fault
+#     (buggy-image/, ~40% error rate / ~600ms latency) is severe enough to trip
+#     detection well inside a short window - bump this to >=900 for a real gate.
+#   - included_resources (optional): only analyze these APM resources.
+#   - excluded_resources (optional): ignore known low-value/noisy resources (e.g.
+#     health checks). Not set here - see the annotated example in
+#     rollouts/deployment-gates-guide.md for the syntax if your service needs it.
+#
+# Prereq secret in the storedog namespace (never commit real keys):
+#   kubectl -n storedog create secret generic datadog-ci-keys \
+#     --from-literal DD_API_KEY="$DD_API_KEY" --from-literal DD_APP_KEY="$DD_APP_KEY"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: datadog-gate-config
+  namespace: storedog
+data:
+  # NOTE: the datadog-ci CLI / Argo Rollouts / GitHub Action config file uses camelCase
+  # keys (dryRun) - this differs from the snake_case (dry_run) used by direct API calls.
+  gate-config.json: |
+    {
+      "dryRun": false,
+      "rules": [
+        {
+          "type": "faulty_deployment_detection",
+          "name": "APM Faulty Deployment Detection - discounts",
+          "options": {
+            "duration": 300
+          }
+        }
+      ]
+    }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate
+metadata:
+  name: datadog-deployment-gate
+spec:
+  args:
+    - name: service
+    - name: env
+    - name: version # REQUIRED for faulty_deployment_detection rules
+  metrics:
+    - name: datadog-deployment-gate
+      # A single Job whose success/failure IS the gate result.
+      failureLimit: 0
+      provider:
+        job:
+          spec:
+            backoffLimit: 0 # do not retry a failed gate evaluation
+            ttlSecondsAfterFinished: 300
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: datadog-ci
+                    # Verified against Docker Hub (2026-07-03): only `latest` and
+                    # `vX.Y.Z` tags exist (e.g. v5.20.1) - there is no `v2` tag.
+                    # v5.19.0+ is required for the `--config` flag used here.
+                    image: datadog/ci:latest
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - >
+                        datadog-ci deployment gate
+                        --service "{{args.service}}"
+                        --env "{{args.env}}"
+                        --version "{{args.version}}"
+                        --config /config/gate-config.json
+                    env:
+                      - name: DD_BETA_COMMANDS_ENABLED
+                        value: "1" # `deployment gate` is a Preview command (per docs)
+                      - name: DD_SITE
+                        value: datadoghq.com
+                      - name: DD_API_KEY
+                        valueFrom:
+                          secretKeyRef: { name: datadog-ci-keys, key: DD_API_KEY }
+                      - name: DD_APP_KEY
+                        valueFrom:
+                          secretKeyRef: { name: datadog-ci-keys, key: DD_APP_KEY }
+                    volumeMounts:
+                      - name: gate-config
+                        mountPath: /config
+                volumes:
+                  - name: gate-config
+                    configMap:
+                      name: datadog-gate-config

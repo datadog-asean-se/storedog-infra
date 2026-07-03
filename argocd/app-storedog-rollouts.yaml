@@ -1,4 +1,4 @@
-# The `discounts` service as an Argo Rollout + its Deployment Gate AnalysisTemplate.
+# The `discounts` service as an Argo Rollout + its Deployment Gate ClusterAnalysisTemplate.
 # Kept as a SEPARATE Application from app-storedog.yaml so you can install the Argo
 # Rollouts CRDs/controller first, then bring this one up - avoids "no matches for
 # kind Rollout" errors on first sync.

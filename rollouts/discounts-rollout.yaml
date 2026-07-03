@@ -4,6 +4,10 @@
 # Converted from k8s-manifests/storedog-app/deployments/discounts.yaml.
 # The USTagging labels (tags.datadoghq.com/{service,env,version}) live on the Rollout
 # metadata so the analysis step can pass them to datadog-ci via fieldRef.
+#
+# The gate policy referenced below (`datadog-deployment-gate`) is a cluster-scoped
+# `ClusterAnalysisTemplate` defined in rollouts/deployment-gate-cluster-analysis-template.yaml -
+# see rollouts/deployment-gates-guide.md for the full writeup.
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
@@ -30,6 +34,7 @@ spec:
         - analysis:
             templates:
               - templateName: datadog-deployment-gate
+                clusterScope: true # datadog-deployment-gate is a ClusterAnalysisTemplate
             args:
               - name: service
                 valueFrom:

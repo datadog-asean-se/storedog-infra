@@ -12,7 +12,7 @@ on GKE with **ArgoCD (GitOps)** and **Argo Rollouts**, purpose-built to demo the
 flowchart LR
   commit[Bump image tag in this repo] --> argocd[ArgoCD sync]
   argocd --> rollout[Argo Rollouts canary]
-  rollout --> gate[AnalysisTemplate Job: datadog-ci deployment gate]
+  rollout --> gate[ClusterAnalysisTemplate Job: datadog-ci deployment gate]
   gate --> fdd[APM Faulty Deployment Detection]
   fdd -->|regression| fail[Gate FAIL -> auto rollback]
   fdd -->|healthy| pass[Gate PASS -> promote 100%]
@@ -35,10 +35,11 @@ point it at your own project.
 |---|---|
 | `terraform/` | Ephemeral GKE cluster (Standard, private nodes, DNS control-plane endpoint, no firewall rules). |
 | `k8s-manifests/` | storedog app manifests (namespace, Datadog agent, configmaps, secret *examples*, deployments, statefulsets). See its own [README](k8s-manifests/README.md) for the compose→K8s mapping. |
-| `rollouts/` | The `discounts` service as an Argo `Rollout` (canary) + the Deployment-Gate `AnalysisTemplate` (JIT `faulty_deployment_detection`). |
+| `rollouts/` | The `discounts` service as an Argo `Rollout` (canary) + the Deployment Gate `ClusterAnalysisTemplate` (JIT `faulty_deployment_detection`) - see [`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md). |
 | `argocd/` | Two ArgoCD `Application` manifests + install notes. |
 | `buggy-image/` | Dockerfile + fault-injection shim for a `discounts:buggy` tag that reliably trips the Deployment Gate. |
 | `feature-flags/` | Notes for the staged-rollout / metric-auto-pause demo (third Deploy control). |
+| `docs/` | [`datadog-cicd-integrations.md`](docs/datadog-cicd-integrations.md) - Datadog Agent integrations for ArgoCD / Argo Rollouts / Argo Workflows. |
 | `scripts/` | `bootstrap.sh` (end-to-end), `port-forward.sh`, `build-and-push-buggy.sh`, `rollout-bad.sh` / `rollout-good.sh` (GitOps trigger/reset). |
 
 ## Prerequisites
@@ -63,6 +64,27 @@ point it at your own project.
 
 ## Quickstart
 
+### Secrets: `dotenvx` (recommended) or plain `export`
+
+Every step below needs `DD_API_KEY` / `DD_APP_KEY` (and optionally
+`NEXT_PUBLIC_DD_APPLICATION_ID` / `NEXT_PUBLIC_DD_CLIENT_TOKEN` for RUM) in the
+environment. If you keep these encrypted with [dotenvx](https://dotenvx.com) in a
+local `.env`, the recommended pattern is to run the bootstrap script (or any
+individual step below) through `dotenvx run --`, which decrypts your `.env` and
+injects it into the child process's environment for that one command - nothing is
+written to disk unencrypted:
+
+```bash
+dotenvx run -- ./scripts/bootstrap.sh
+```
+
+If you don't already maintain an encrypted `.env` for this project, plain
+`export DD_API_KEY=... DD_APP_KEY=...` (as shown throughout the rest of this guide)
+works exactly the same way - `dotenvx` is a convenience for teams who already encrypt
+their secrets this way, not a hard requirement of this repo. (If you're setting up
+`dotenvx` for the first time, its own docs cover generating an `.env.keys` file and
+`dotenvx encrypt` for creating the encrypted `.env` - out of scope here.)
+
 ### Option A - guided script
 
 ```bash
@@ -71,6 +93,8 @@ cd storedog-infra
 export DD_API_KEY=...   DD_APP_KEY=...
 export NEXT_PUBLIC_DD_APPLICATION_ID=...  NEXT_PUBLIC_DD_CLIENT_TOKEN=...   # optional, for RUM
 ./scripts/bootstrap.sh
+# or, with an encrypted .env managed by dotenvx:
+#   dotenvx run -- ./scripts/bootstrap.sh
 ```
 
 `bootstrap.sh` runs Terraform, configures `kubectl` via the DNS endpoint, installs
@@ -105,6 +129,10 @@ Follow [`argocd/install-notes.md`](argocd/install-notes.md) step 3. This creates
 `datadog-secret` (namespace `datadog`, API/APP keys for the agent), `storedog-secrets`
 + `datadog-secret` (namespace `storedog`, DB password + RUM credentials), and
 `datadog-ci-keys` (namespace `storedog`, used by the Deployment Gate Job).
+
+If `DD_API_KEY`/`DD_APP_KEY` come from an encrypted `.env` via `dotenvx`, prefix any of
+these `kubectl create secret` commands with `dotenvx run --`, e.g.
+`dotenvx run -- kubectl -n datadog create secret generic datadog-secret --from-literal api-key="$DD_API_KEY" --from-literal app-key="$DD_APP_KEY"`.
 
 **4. Datadog Operator**
 
@@ -164,6 +192,27 @@ the APM evidence behind it.
 **Feature Flags staged rollout** (third Deploy control): see
 [`feature-flags/staged-rollout-notes.md`](feature-flags/staged-rollout-notes.md).
 
+## Setting up the Deployment Gate policy
+
+The Deployment Gate itself - what it is, JIT vs. preconfigured mode, the
+`ConfigMap` + `ClusterAnalysisTemplate` pattern this repo uses, how
+`faulty_deployment_detection` works, and how it maps onto the Rollout's canary
+steps - is documented in full in
+[`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md). Read
+that before changing `rollouts/deployment-gate-cluster-analysis-template.yaml` or
+adapting this pattern for another service.
+
+## Datadog integrations for the CI/CD stack
+
+Beyond the Deployment Gate (which talks to the Datadog API directly via
+`datadog-ci`), Datadog also ships Agent-based integrations for ArgoCD and Argo
+Rollouts themselves (dashboards + metrics on sync health, rollout/analysis state,
+controller resource usage). See
+[`docs/datadog-cicd-integrations.md`](docs/datadog-cicd-integrations.md) for what
+each integration provides, whether it's applicable here, and the exact
+Autodiscovery annotations to enable it on this repo's cluster. That doc also covers
+Argo Workflows for reference, even though it's **not** part of this stack.
+
 ## Updating versions (normal GitOps flow)
 
 This repo's manifests use **pinned, concrete values** (no shell templating) so
@@ -187,7 +236,7 @@ teardown - don't reuse this project/cluster for anything you need to persist.
 | Symptom | Likely cause / fix |
 |---|---|
 | `no matches for kind "Rollout"` | Argo Rollouts controller not installed yet - see step 2. |
-| Deployment Gate Job never appears | `datadog-ci-keys` secret missing in `storedog` namespace, or the AnalysisTemplate wasn't synced (check `storedog-rollouts` Application). |
+| Deployment Gate Job never appears | `datadog-ci-keys` secret missing in `storedog` namespace, or the `ClusterAnalysisTemplate`/`ConfigMap` wasn't synced (check `storedog-rollouts` Application). |
 | Gate always passes even on the buggy image | Give it more traffic/time - Faulty Deployment Detection needs real APM data during the `pause` step; check APM is enabled in `k8s-manifests/datadog/datadog-agent.yaml` and traces are flowing for `store-discounts`. |
 | `kubectl port-forward` connection refused | Pods not Ready yet - `kubectl -n storedog get pods`; `service-proxy` waits on `frontend`/`backend`. |
 | ArgoCD stuck `OutOfSync` on the Datadog agent CR | The Datadog Operator (Helm) must be installed *before* ArgoCD syncs the `DatadogAgent` CR - see step 4. |
@@ -197,5 +246,9 @@ teardown - don't reuse this project/cluster for anything you need to persist.
 - This infra was built to support a 15-minute demo on how Datadog helps across the
   Agent Development Lifecycle (Discovery / Build / Deploy) - ask in `#se-asean` if
   you'd like the companion deck and run-of-show.
+- [`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md) - this
+  repo's own annotated walkthrough of the Deployment Gate setup.
+- [`docs/datadog-cicd-integrations.md`](docs/datadog-cicd-integrations.md) - Datadog
+  Agent integrations for ArgoCD / Argo Rollouts / Argo Workflows.
 - [Datadog Deployment Gates docs](https://docs.datadoghq.com/deployment_gates/setup/jit/)
 - [Argo Rollouts Datadog provider](https://argoproj.github.io/argo-rollouts/analysis/datadog/)
