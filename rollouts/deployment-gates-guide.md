@@ -150,12 +150,28 @@ Per the [JIT rule-types docs](https://docs.datadoghq.com/deployment_gates/setup/
   - `duration` (optional): length of the analysis window in seconds. Datadog's
     general recommendation for production use is **at least 900s (15 minutes)**
     "for optimal analysis confidence"; the max is 7200s (2 hours). **This repo
-    deliberately uses `duration: 300`** (5 minutes) to keep the live demo short -
-    the injected fault (`buggy-image/`, ~40% error rate / ~600ms latency vs.
-    ~0%/~5ms clean) is severe enough to trip detection well inside a short window.
-    This trade-off has been reviewed and confirmed acceptable by the demo owner
-    for this demo specifically - it is not an open question. **For a real
-    production gate, still use >=900s.**
+    now uses `duration: 900`**, matching that recommendation.
+
+    This repo originally shipped `duration: 300` on the theory that the injected
+    fault (`buggy-image/`, ~25% error rate / +600ms latency) was severe enough to
+    trip detection well inside a short window, and that trade-off was reviewed
+    and signed off as acceptable for demo purposes. A live end-to-end test
+    against a real Datadog org proved that assumption wrong in practice: at 300s
+    and 25% canary weight, every attempt against the genuinely broken canary
+    **passed** the gate. Root cause, confirmed via the Datadog Spans Analytics
+    API: `store-discounts` is backed by Werkzeug's single-threaded development
+    server and (independently of the injected fault) already has multi-second
+    response times under any concurrent load, and the app's own discount-listing
+    endpoint does what looks like an N+1 relationship query per row - so even
+    modest traffic during a 300s window produced only a handful of samples
+    against the canary, nowhere near enough for Watchdog to reach a confident
+    verdict. Widening the window to 900s, combined with a patient, purely
+    sequential load generator (`scripts/generate-discount-load.sh` - see its
+    header comment for why sequential, not concurrent, matters here), gives
+    enough elapsed time to accumulate a meaningful sample even against a slow
+    backend. **For a real production gate against a normally-performant service,
+    900s is a reasonable default; if your service is this slow, budget for an
+    even longer window or fix the underlying performance issue first.**
   - `included_resources` (optional): if set, only these APM resources are analyzed.
   - `excluded_resources` (optional): APM resources to ignore (e.g. low-value or noisy
     endpoints like health checks), so they don't generate false positives/negatives.

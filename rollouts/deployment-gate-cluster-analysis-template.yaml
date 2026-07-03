@@ -31,10 +31,15 @@
 # using Watchdog APM analysis - no prior Datadog-side gate setup required for
 # APM-instrumented services. `options` fields per the docs:
 #   - duration (optional): analysis window in seconds. Docs recommend >=900 (15 min)
-#     "for optimal analysis confidence"; max is 7200. This demo config uses a shorter
-#     window (see the ConfigMap below) because the injected fault
-#     (buggy-image/, ~40% error rate / ~600ms latency) is severe enough to trip
-#     detection well inside a short window - bump this to >=900 for a real gate.
+#     "for optimal analysis confidence"; max is 7200. This repo originally shipped a
+#     shorter 300s window for demo speed, but a live end-to-end test against a real
+#     Datadog org found that 300s (and 25% canary weight against `store-discounts`'s
+#     naturally slow, single-threaded dev-server-backed responses - several seconds
+#     per request even on the healthy version) produced too little request volume
+#     for Watchdog to reach a confident verdict; every attempt at 300s PASSED even
+#     against a genuinely broken canary. Set to the docs-recommended 900 for real
+#     confidence - see rollouts/deployment-gates-guide.md for the full writeup and
+#     scripts/generate-discount-load.sh for generating enough traffic in that window.
 #   - included_resources (optional): only analyze these APM resources.
 #   - excluded_resources (optional): ignore known low-value/noisy resources (e.g.
 #     health checks). Not set here - see the annotated example in
@@ -59,7 +64,7 @@ data:
           "type": "faulty_deployment_detection",
           "name": "APM Faulty Deployment Detection - discounts",
           "options": {
-            "duration": 300
+            "duration": 900
           }
         }
       ]
