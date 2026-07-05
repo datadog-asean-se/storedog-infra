@@ -45,9 +45,12 @@ adapt it for your own service.
 >
 > That is a dramatic, unambiguous, properly-instrumented regression by any
 > reasonable statistical standard, evaluated over Datadog's own recommended 900s
-> window - and the gate **still returned `pass`** (evaluation ID confirmed via
-> direct `GET /api/v2/deployments/gates/evaluation/<id>` calls, not just the
-> `datadog-ci` CLI's own report).
+> window - and the gate **still returned `pass`**. Confirmed via a direct
+> `GET /api/v2/deployments/gates/evaluation/<id>` API call (not just the
+> `datadog-ci` CLI's own report) for evaluation ID `bc3c355d-f4b6-47c6-b9ae-5728d766584c`
+> (version `bad-20260705112212`, `store-discounts`, org `nuttee.datadoghq.com`) -
+> use this ID to look the evaluation up directly in the Deployment Gates
+> Evaluations page in the Datadog UI.
 >
 > **Before presenting the FAIL path live, check:**
 > - Whether `faulty_deployment_detection` needs more historical data for the
@@ -56,11 +59,11 @@ adapt it for your own service.
 >   possible Watchdog wants a longer-established baseline across multiple
 >   deployments of the same service before it trusts a comparison, independent of
 >   how much data the *new* version has).
-> - The actual Deployment Gates Evaluations page in the Datadog UI for one of the
->   evaluation IDs above (not accessible via this session's CLI-only access) -
+> - The actual Deployment Gates Evaluations page in the Datadog UI for the
+>   evaluation ID above (not accessible via this session's CLI-only access) -
 >   it may show a specific reason/confidence score the API's `pass`/`fail` summary
 >   doesn't surface.
-> - Consider asking Datadog support directly, referencing the evaluation IDs and
+> - Consider asking Datadog support directly, referencing the evaluation ID and
 >   the before/after error-span data above - this now looks like a question about
 >   Faulty Deployment Detection's detection logic/thresholds for this specific
 >   service and traffic shape, not a problem with this repo's gate configuration
