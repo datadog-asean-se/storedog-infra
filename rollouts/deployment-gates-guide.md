@@ -8,30 +8,63 @@ adapt it for your own service.
 >
 > The PASS→promote path is fully proven live (real evaluation IDs, real API
 > confirmation, real promotion to `setWeight: 100`). The **FAIL→rollback** path is
-> not: across 7 live attempts against this demo's Datadog org - spanning a 300s and
-> a 900s analysis window, 25%-50%/600ms and 90%/5000ms fault severity, and both
-> the default puppeteer traffic and a dedicated sequential load generator - the
-> gate **passed every time**, even against a canary serving ~90% real HTTP 500s.
+> not: across 8 live attempts against this demo's Datadog org, the gate **passed
+> every time**, including the most recent attempt with airtight evidence of a real,
+> fully-instrumented regression (see below). This is no longer believed to be an
+> APM sampling/ingestion problem - that hypothesis was directly tested and ruled
+> out. What remains open is a genuine question about Watchdog Faulty Deployment
+> Detection's sensitivity or confidence requirements for this traffic pattern.
 >
-> The most likely explanation: `store-discounts`'s APM trace sampling/ingestion in
-> this org may be too low for Watchdog to accumulate enough **error span** volume
-> to reach a confident verdict. This is suspected, not confirmed - the Datadog
-> Spans Analytics API consistently showed almost no indexed error spans for this
-> service even when the load generator's own client-side logs showed dozens of
-> confirmed real 500 responses, which points at a sampling/retention gap between
-> "requests actually happening" and what's indexed for search (and, presumably,
-> what Watchdog draws on).
+> **What was tested and ruled out (this round):**
+> - **Org-level retention filters** (`GET /api/v2/apm/config/retention-filters`):
+>   an "Error Default" filter (`status:error`, `rate: 1`) is already enabled
+>   org-wide - error spans that reach this stage should already be retained at
+>   100%. Not the blocker.
+> - **Client-side trace sampling**: added `DD_TRACE_SAMPLE_RATE=1.0` to the
+>   `discounts` Rollout's pod env (see `rollouts/discounts-rollout.yaml`) to force
+>   100% local sampling, ruling out Agent-side head-based sampling (default target
+>   ~10 traces/sec/Agent) as a factor at this demo's traffic volume.
+> - **The actual root cause of every prior attempt's near-zero error-span counts**:
+>   `buggy-image/sitecustomize.py` used to inject the fault by monkeypatching
+>   `Flask.wsgi_app` directly and calling `start_response()` itself - bypassing
+>   Flask's (and therefore ddtrace's Flask integration's) normal request/exception
+>   dispatch entirely for the faulty code path. Those 500s were real HTTP
+>   responses but were **never recorded as APM errors at all**. Fixed by
+>   rewriting the fault injection as a Flask `before_request` hook +
+>   `flask.abort(500)`, which flows through Flask's normal exception handling and
+>   is fully visible to ddtrace.
+>
+> **Result after the fix - error spans now show up correctly**, with dramatically
+> more volume and clear `status:error` tagging (verified via the Datadog Spans
+> Analytics API immediately after a fresh live attempt):
+>
+> | | Requests | Errors | Error rate |
+> |---|---|---|---|
+> | Stable baseline (`1.0.0`) | 318 | 0 | 0% |
+> | Buggy canary (this attempt) | 328 | 228 | ~70% |
+>
+> That is a dramatic, unambiguous, properly-instrumented regression by any
+> reasonable statistical standard, evaluated over Datadog's own recommended 900s
+> window - and the gate **still returned `pass`** (evaluation ID confirmed via
+> direct `GET /api/v2/deployments/gates/evaluation/<id>` calls, not just the
+> `datadog-ci` CLI's own report).
 >
 > **Before presenting the FAIL path live, check:**
-> - The Datadog UI's APM service settings for `store-discounts` (ingestion
->   controls / retention filters / trace sampling rate).
-> - Whether `store-discounts` traces are being sampled at a materially lower rate
->   than other storedog services.
-> - Consider asking Datadog support directly if the above doesn't explain it -
->   this may be specific to how Faulty Deployment Detection sources its signal
->   rather than anything wrong with this repo's gate configuration, which was
->   independently verified correct (`ClusterAnalysisTemplate` schema, `datadog-ci`
->   invocation, real evaluation IDs returned and polled successfully every time).
+> - Whether `faulty_deployment_detection` needs more historical data for the
+>   *previous* version specifically (each demo run mints a brand-new unique
+>   `version` string with only one prior deployment's worth of history - it's
+>   possible Watchdog wants a longer-established baseline across multiple
+>   deployments of the same service before it trusts a comparison, independent of
+>   how much data the *new* version has).
+> - The actual Deployment Gates Evaluations page in the Datadog UI for one of the
+>   evaluation IDs above (not accessible via this session's CLI-only access) -
+>   it may show a specific reason/confidence score the API's `pass`/`fail` summary
+>   doesn't surface.
+> - Consider asking Datadog support directly, referencing the evaluation IDs and
+>   the before/after error-span data above - this now looks like a question about
+>   Faulty Deployment Detection's detection logic/thresholds for this specific
+>   service and traffic shape, not a problem with this repo's gate configuration
+>   or instrumentation (both independently verified correct).
 >
 > If you resolve this, please update this note with what fixed it.
 
