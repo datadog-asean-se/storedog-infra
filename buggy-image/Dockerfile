@@ -15,11 +15,14 @@ ENV PYTHONPATH=/faults
 
 # Turn on the app's built-in random-error path too (see discounts.py).
 ENV BROKEN_DISCOUNTS=ENABLED
-# Escalated live during gate-FAIL debugging: 600ms/25% wasn't enough to trip
-# Faulty Deployment Detection even with a 900s window and dedicated sustained
-# load (see rollouts/deployment-gates-guide.md) - discounts already has several
-# seconds of baseline latency and low natural throughput, which buried a
-# moderate regression in noise. Escalated to a near-total outage so it's
-# unambiguous regardless of sample size.
-ENV FAULT_LATENCY_MS=5000
-ENV FAULT_ERROR_RATE=0.9
+# Dialed back to a more demo-realistic "clearly broken, not a total outage"
+# severity after finding and fixing the actual root cause of prior gate-FAIL
+# attempts never triggering: sitecustomize.py used to inject the fault by
+# monkeypatching Flask.wsgi_app directly, which bypassed ddtrace's Flask
+# instrumentation entirely for the faulty code path, so those 500s were never
+# recorded as APM errors at all (near-zero error spans regardless of fault
+# severity or gate window - see rollouts/deployment-gates-guide.md). Now that
+# the fault is injected via a proper before_request/abort(500) hook (traced
+# correctly), a moderate regression should be plenty.
+ENV FAULT_LATENCY_MS=1500
+ENV FAULT_ERROR_RATE=0.45
