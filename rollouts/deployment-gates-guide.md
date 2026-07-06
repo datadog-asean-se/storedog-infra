@@ -4,81 +4,98 @@ This document walks through the Datadog **Deployment Gate** used by
 `rollouts/discounts-rollout.yaml`, why it's implemented the way it is, and how to
 adapt it for your own service.
 
-> ## ⚠️ Known gap: gate FAIL→rollback has not been reproduced live
+> ## ✅ Resolved: gate FAIL→rollback confirmed live (via a second `monitor` rule)
 >
-> The PASS→promote path is fully proven live (real evaluation IDs, real API
-> confirmation, real promotion to `setWeight: 100`). The **FAIL→rollback** path is
-> not: across 8 live attempts against this demo's Datadog org, the gate **passed
-> every time**, including the most recent attempt with airtight evidence of a real,
-> fully-instrumented regression (see below). This is no longer believed to be an
-> APM sampling/ingestion problem - that hypothesis was directly tested and ruled
-> out. What remains open is a genuine question about Watchdog Faulty Deployment
-> Detection's sensitivity or confidence requirements for this traffic pattern.
+> **Both directions of the gate are now proven live** against this demo's Datadog
+> org, with hard evidence for each:
 >
-> **What was tested and ruled out (this round):**
-> - **Org-level retention filters** (`GET /api/v2/apm/config/retention-filters`):
->   an "Error Default" filter (`status:error`, `rate: 1`) is already enabled
->   org-wide - error spans that reach this stage should already be retained at
->   100%. Not the blocker.
-> - **Client-side trace sampling**: added `DD_TRACE_SAMPLE_RATE=1.0` to the
->   `discounts` Rollout's pod env (see `rollouts/discounts-rollout.yaml`) to force
->   100% local sampling, ruling out Agent-side head-based sampling (default target
->   ~10 traces/sec/Agent) as a factor at this demo's traffic volume.
-> - **The actual root cause of every prior attempt's near-zero error-span counts**:
+> - **FAIL -> automatic rollback**: triggered the buggy canary
+>   (`version:bad-20260706170126`) at 50% canary weight. The gate's Job logged
+>   `❌ Gate evaluation failed`, evaluation ID `24209bf8-48c7-4c38-99f0-5547b1352b97`,
+>   with the `store-discounts error rate monitor` rule reporting
+>   `Status: FAIL`, `Reason: One or more monitors in ALERT state:
+>   https://.../monitors/302826417`. Confirmed independently via a direct
+>   `GET /api/v2/deployments/gates/evaluation/24209bf8-48c7-4c38-99f0-5547b1352b97`
+>   call (`"gate_status":"fail"`), not just the `datadog-ci` CLI's own report.
+>   **Argo Rollouts itself then genuinely aborted and rolled back**: `kubectl argo
+>   rollouts get rollout discounts` showed `Status: ✖ Degraded`,
+>   `Message: RolloutAborted: ... Metric "datadog-deployment-gate" assessed
+>   Failed`, `SetWeight: 0`, the canary ReplicaSet `ScaledDown`, and the stable
+>   ReplicaSet scaled back to its full desired replica count on the healthy
+>   `:good` image - not just an isolated CLI exit code, an actual live rollback.
+> - **PASS -> promote**: after resetting to the healthy `:good` image and letting
+>   the monitor's trailing 5-minute window clear (see the operational note
+>   below), a follow-up attempt's `AnalysisRun` reported `✔ Successful` and the
+>   `Rollout` reached `Status: ✔ Healthy`, `SetWeight: 100` on the `:good` image.
+>
+> This was **not** achieved by relying on `faulty_deployment_detection` /
+> Watchdog alone - that rule was still `IN_PROGRESS` when both gate evaluations
+> above resolved (the gate fails as soon as any required rule definitively
+> fails, per "all rules must pass"; it doesn't wait for every rule to finish).
+> The `monitor` rule (added specifically because Watchdog wasn't reliably
+> flagging real regressions - see the retained history below) is what actually
+> produced the FAIL. **Whether `faulty_deployment_detection` alone would ever
+> have failed on this same regression remains unconfirmed** - the monitor rule
+> resolved the gate before it finished evaluating in every attempt.
+>
+> **A real dilution/weighting bug had to be fixed first** - see the "Gotcha"
+> note under "How the `monitor` rule works" below for the full arithmetic. In
+> short: the monitor's query aggregates errors/hits across both canary and
+> stable pods (scoped by `service`, not `version`), so at the original 25%
+> canary weight and 45% fault rate, the aggregate error rate the monitor could
+> ever see was capped at `0.25 x 0.45 = 11.25%` - permanently below the original
+> 15% critical threshold no matter how much traffic was generated. Fixed with
+> two levers together: canary `setWeight` raised 25% -> 50%
+> (`rollouts/discounts-rollout.yaml`) and the monitor's thresholds lowered
+> 15%/8% -> 8%/4% critical/warning (`terraform/monitor.tf`), giving a confirmed
+> live aggregate of well over 40% against an 8% threshold - ample margin.
+>
+> **Operational note found live**: after a FAIL/rollback, the monitor stays in
+> `Alert` state for its trailing 5-minute window even once traffic is clean
+> again. A `good`-image verification run immediately after a `FAIL` attempt
+> failed for the same monitor-in-Alert reason, purely because the window hadn't
+> cleared yet - not a new bug, just residual state. Wait for the monitor to show
+> `OK` (`GET /api/v1/monitor/<id>`) before re-running a verification, or budget
+> for one retry.
+>
+> <details>
+> <summary>Retained history: what led to adding the <code>monitor</code> rule</summary>
+>
+> The PASS→promote path was fully proven live first (real evaluation IDs, real
+> API confirmation, real promotion to `setWeight: 100`). The FAIL→rollback path
+> was not: across 8 live attempts relying on `faulty_deployment_detection`
+> alone, the gate **passed every time**, including an attempt with airtight
+> evidence of a real, fully-instrumented regression. That was root-caused to two
+> issues, both fixed along the way:
+>
+> - **The actual root cause of early attempts' near-zero error-span counts**:
 >   `buggy-image/sitecustomize.py` used to inject the fault by monkeypatching
 >   `Flask.wsgi_app` directly and calling `start_response()` itself - bypassing
 >   Flask's (and therefore ddtrace's Flask integration's) normal request/exception
 >   dispatch entirely for the faulty code path. Those 500s were real HTTP
->   responses but were **never recorded as APM errors at all**. Fixed by
->   rewriting the fault injection as a Flask `before_request` hook +
->   `flask.abort(500)`, which flows through Flask's normal exception handling and
->   is fully visible to ddtrace.
+>   responses but were never recorded as APM errors at all. Fixed by rewriting
+>   the fault injection as a Flask `before_request` hook + `flask.abort(500)`,
+>   which flows through Flask's normal exception handling and is fully visible
+>   to ddtrace.
+> - After that fix, error spans showed up correctly (228 errors / 328 requests,
+>   ~70% error rate, vs. a 0-error/318-request healthy baseline, both confirmed
+>   via the Spans Analytics API) over Datadog's own recommended 900s window -
+>   and `faulty_deployment_detection` **still returned `pass`** (evaluation ID
+>   `bc3c355d-f4b6-47c6-b9ae-5728d766584c`, confirmed via a direct
+>   `GET /api/v2/deployments/gates/evaluation/<id>` call). Org-level retention
+>   filters and client-side trace sampling (`DD_TRACE_SAMPLE_RATE=1.0`, still set
+>   in `rollouts/discounts-rollout.yaml`) were both checked and ruled out as
+>   explanations.
 >
-> **Result after the fix - error spans now show up correctly**, with dramatically
-> more volume and clear `status:error` tagging (verified via the Datadog Spans
-> Analytics API immediately after a fresh live attempt):
+> **This remains an open, unexplained question about `faulty_deployment_detection`
+> / Watchdog specifically** - not resolved, just no longer blocking the demo,
+> since the `monitor` rule now reliably catches the same class of regression.
+> If you rely on `faulty_deployment_detection` alone (no `monitor` rule) for
+> your own service, budget time to validate it the same way this session did,
+> and consider asking Datadog support if you hit the same non-detection,
+> referencing evaluation ID `bc3c355d-f4b6-47c6-b9ae-5728d766584c` above.
 >
-> | | Requests | Errors | Error rate |
-> |---|---|---|---|
-> | Stable baseline (`1.0.0`) | 318 | 0 | 0% |
-> | Buggy canary (this attempt) | 328 | 228 | ~70% |
->
-> That is a dramatic, unambiguous, properly-instrumented regression by any
-> reasonable statistical standard, evaluated over Datadog's own recommended 900s
-> window - and the gate **still returned `pass`**. Confirmed via a direct
-> `GET /api/v2/deployments/gates/evaluation/<id>` API call (not just the
-> `datadog-ci` CLI's own report) for evaluation ID `bc3c355d-f4b6-47c6-b9ae-5728d766584c`
-> (version `bad-20260705112212`, `store-discounts`, org `nuttee.datadoghq.com`) -
-> use this ID to look the evaluation up directly in the Deployment Gates
-> Evaluations page in the Datadog UI.
->
-> **Before presenting the FAIL path live, check:**
-> - Whether `faulty_deployment_detection` needs more historical data for the
->   *previous* version specifically (each demo run mints a brand-new unique
->   `version` string with only one prior deployment's worth of history - it's
->   possible Watchdog wants a longer-established baseline across multiple
->   deployments of the same service before it trusts a comparison, independent of
->   how much data the *new* version has).
-> - The actual Deployment Gates Evaluations page in the Datadog UI for the
->   evaluation ID above (not accessible via this session's CLI-only access) -
->   it may show a specific reason/confidence score the API's `pass`/`fail` summary
->   doesn't surface.
-> - Consider asking Datadog support directly, referencing the evaluation ID and
->   the before/after error-span data above - this now looks like a question about
->   Faulty Deployment Detection's detection logic/thresholds for this specific
->   service and traffic shape, not a problem with this repo's gate configuration
->   or instrumentation (both independently verified correct).
->
-> If you resolve this, please update this note with what fixed it.
->
-> **Mitigation added (not yet live-tested):** a second gate rule, of type
-> `monitor`, now checks a real Datadog Monitor with a deterministic error-rate
-> threshold (15% critical) on `store-discounts` - independent of Watchdog's ML
-> confidence scoring entirely. See "How the `monitor` rule works" below for the
-> full detail. This is expected to be a more reliable FAIL trigger, but it hasn't
-> been exercised through a live canary run yet (added in a session that
-> intentionally didn't spin up the demo cluster, to create the monitor via
-> Terraform without incurring cluster cost).
+> </details>
 
 ## What a Deployment Gate is
 

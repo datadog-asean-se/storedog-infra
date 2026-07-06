@@ -202,10 +202,14 @@ steps - is documented in full in
 that before changing `rollouts/deployment-gate-cluster-analysis-template.yaml` or
 adapting this pattern for another service.
 
-> **Known gap:** the gate's PASS→promote path is proven live; FAIL→rollback is
-> not, as of the last live test. See the "Known gap" callout at the top of
-> [`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md) before
-> relying on the FAIL path for a live demo.
+> **Both directions of the Deployment Gate are confirmed live**: FAIL->automatic
+> rollback and PASS->promote. See the top of
+> [`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md) for the
+> full evidence (evaluation IDs, monitor state, Rollout status) - a second
+> `monitor` rule (`terraform/monitor.tf`) was required to get a reliable FAIL,
+> since Watchdog `faulty_deployment_detection` alone did not flag a real,
+> hard-evidenced regression in this org (retained in the same section for anyone
+> relying on Watchdog alone).
 
 ## Datadog integrations for the CI/CD stack
 
