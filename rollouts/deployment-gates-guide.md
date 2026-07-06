@@ -337,6 +337,26 @@ monitor_thresholds {
   while the buggy canary measured **~70% errors over 328 requests**. 15%
   critical / 8% warning sits comfortably above normal noise and well below what this
   demo's `:buggy` image reliably reproduces.
+- **Gotcha: this monitor is scoped by `service`, not `version` - dilution math
+  matters.** The query aggregates errors/hits across **both** the healthy stable
+  pods and the buggy canary pod, since they share `service:store-discounts` and
+  differ only by the `version` tag (which the query doesn't filter on). During the
+  canary step (`setWeight: 25`), only 25% of Service traffic reaches the buggy pod;
+  the other 75% hits the stable pods at ~0% errors. The resulting **aggregate**
+  error rate the monitor actually sees is a weighted average -
+  `canary_weight x FAULT_ERROR_RATE` - not the raw fault rate itself. Found live:
+  at `FAULT_ERROR_RATE=0.45` and 25% canary weight, the ceiling is
+  `0.25 x 0.45 = 11.25%`, permanently below the 15% critical threshold **no matter
+  how much traffic you generate** - more volume just converges the measurement on
+  11.25%, it never crosses 15%. This is a dilution/weighting problem, not a
+  sample-size problem, and is easy to miss if you only think about "is the fault
+  severe enough" without accounting for canary weight. See `buggy-image/Dockerfile`
+  for the corrected math (`FAULT_ERROR_RATE=0.90` -> `0.25 x 0.90 = 22.5%`, clear of
+  threshold with margin). If you build a similar service-level (not version-scoped)
+  monitor for your own canary gate, either scope the monitor's query by `version`
+  too (if your rollout tool propagates a `version` tag Datadog can filter on), or
+  do this same weighted-average math against your actual canary `setWeight` before
+  picking a threshold and fault severity.
 - The gate's rule references it via
   `"query": "tag:\"gate:discounts-error-rate\""` - verified live to match exactly
   this one monitor via `GET /api/v1/monitor/search?query=tag:"gate:discounts-error-rate"`.
