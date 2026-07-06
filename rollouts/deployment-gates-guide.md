@@ -70,6 +70,15 @@ adapt it for your own service.
 >   or instrumentation (both independently verified correct).
 >
 > If you resolve this, please update this note with what fixed it.
+>
+> **Mitigation added (not yet live-tested):** a second gate rule, of type
+> `monitor`, now checks a real Datadog Monitor with a deterministic error-rate
+> threshold (15% critical) on `store-discounts` - independent of Watchdog's ML
+> confidence scoring entirely. See "How the `monitor` rule works" below for the
+> full detail. This is expected to be a more reliable FAIL trigger, but it hasn't
+> been exercised through a live canary run yet (added in a session that
+> intentionally didn't spin up the demo cluster, to create the monitor via
+> Terraform without incurring cluster cost).
 
 ## What a Deployment Gate is
 
@@ -259,6 +268,106 @@ Per the [JIT rule-types docs](https://docs.datadoghq.com/deployment_gates/setup/
 - New errors / error-rate increases are detected at the APM **resource** level, and
   the rule is evaluated per additional primary tag value plus an aggregate (you can
   scope to a single primary tag via `primary_tag` in the request - not used here).
+
+## How the `monitor` rule works (the second gate rule)
+
+Added after the "Known gap" investigation below: a second rule, of type `monitor`,
+checks a real, deterministic Datadog Monitor's state instead of relying on
+Watchdog's ML-based confidence scoring. **Both rules must pass for the gate to
+pass** - the JIT docs are explicit: "All rules must pass for the gate to pass."
+There's no ANY/OR semantic across rules in a single gate.
+
+Per the [JIT rule-types docs](https://docs.datadoghq.com/deployment_gates/setup/jit/)
+("Monitor" tab, fetched 2026-07-06), this rule type is fundamentally different from
+`faulty_deployment_detection`:
+
+- **It requires a pre-existing Datadog Monitor object.** Unlike
+  `faulty_deployment_detection` (fully self-contained/inline, no Datadog-side setup),
+  the `monitor` rule evaluates the state of **existing** monitors - there's nothing to
+  create inline. This repo provisions that monitor as real Terraform IaC:
+  [`terraform/monitor.tf`](../terraform/monitor.tf) -> `datadog_monitor.discounts_error_rate`.
+- **The rule's `options.query` is a Monitor Search query, not a monitor ID.** There is
+  no `monitor_id` field for this rule type (verify this yourself before assuming
+  otherwise - it's an easy wrong guess). The docs' own schema:
+
+  ```json
+  {
+    "type": "monitor",
+    "name": "Service monitors",
+    "options": {
+      "query": "service:transaction-backend env:production",
+      "duration": 300
+    }
+  }
+  ```
+
+  `query` uses [Monitor Search](https://docs.datadoghq.com/monitors/manage/search/)
+  syntax and can filter on: a monitor's static tags (`service:transaction-backend`),
+  tags inside the monitor's own query (`scope:"service:transaction-backend"`), or
+  tags within a monitor grouping (`group:"service:transaction-backend"`).
+- **Fail conditions** (evaluated continuously for `options.duration` seconds,
+  default 0 = instant, max 7200): the gate rule fails if, at any point in that
+  window: no monitors match the query, more than 50 monitors match, or **any**
+  matching monitor is in `ALERT` or **`NO_DATA`** state. Muted monitors are excluded
+  automatically (the query always implicitly includes `muted:false`).
+
+### The monitor this repo creates
+
+[`terraform/monitor.tf`](../terraform/monitor.tf) creates a single `metric alert`
+monitor tagged `gate:discounts-error-rate` (a dedicated tag, not just
+`service:store-discounts`, so the gate's search query stays unambiguous even if more
+monitors get added for this service later):
+
+```hcl
+query = "sum(last_5m):( sum:trace.flask.request.errors{service:store-discounts}.as_count() / sum:trace.flask.request.hits{service:store-discounts}.as_count() ) * 100 > 15"
+
+monitor_thresholds {
+  critical = "15"
+  warning  = "8"
+}
+```
+
+- **Metric names verified live**, not guessed: `GET /api/v1/search?q=metrics:flask`
+  against this org returned `trace.flask.request.hits` and `trace.flask.request.errors`
+  - the standard ddtrace-generated APM count metrics for a Flask service's default
+  `flask.request` span. Confirmed both carry real data tagged `service:store-discounts`
+  via direct `GET /api/v1/query` timeseries calls before wiring them into the monitor.
+- **Threshold rationale**, from this session's own live measurements (see the "Known
+  gap" section below): a healthy baseline measured **0% errors over 318 requests**,
+  while the buggy canary measured **~70% errors over 328 requests**. 15%
+  critical / 8% warning sits comfortably above normal noise and well below what this
+  demo's `:buggy` image reliably reproduces.
+- The gate's rule references it via
+  `"query": "tag:\"gate:discounts-error-rate\""` - verified live to match exactly
+  this one monitor via `GET /api/v1/monitor/search?query=tag:"gate:discounts-error-rate"`.
+- **Operational caveat**: since the `monitor` rule also fails on `NO_DATA`, this
+  monitor needs *some* traffic flowing to `store-discounts` during the gate's
+  evaluation window (guaranteed in this repo by `fake-traffic/puppeteer.yaml` and/or
+  `scripts/generate-discount-load.sh`) - `notify_no_data = false` and
+  `require_full_window = false` are set on the monitor to avoid spurious notifications
+  and premature failures in the first few minutes after a fresh deploy, but a
+  genuinely traffic-less service would still eventually show `NO_DATA` and fail this
+  rule. Get the monitor via
+  `terraform output discounts_error_rate_monitor_id` /
+  `terraform output discounts_error_rate_monitor_url`, or directly:
+  `dotenvx run -- terraform apply -target=datadog_monitor.discounts_error_rate` (no
+  dependency on the GKE cluster resources - safe to create/update without touching
+  the ephemeral cluster).
+- **Not yet validated live end-to-end**: this rule was added and the monitor
+  independently confirmed live (via the Datadog API) in a session where the demo
+  cluster was intentionally *not* running, per a request to add this IaC without
+  incurring cluster cost. It has not yet been exercised through an actual canary +
+  gate run. Given it's a plain deterministic threshold (not an ML confidence score),
+  it's expected to be a more reliable FAIL trigger than `faulty_deployment_detection`
+  alone given the Watchdog sensitivity gap documented below - but that is a
+  prediction, not a confirmed result, until someone runs the live demo again.
+- **No shared Terraform state**: this repo has no configured remote backend (see the
+  commented-out `backend "gcs"` block in `terraform/versions.tf`) - state is local to
+  whoever last ran `terraform apply`. The monitor is a persistent, reusable object
+  (unlike the ephemeral GKE cluster), so before running `terraform apply` fresh,
+  check whether it already exists (search for the `gate:discounts-error-rate` tag in
+  the Datadog UI or via `GET /api/v1/monitor/search`) and `terraform import` it
+  instead of creating a duplicate - see the comment at the top of `terraform/monitor.tf`.
 
 ## How this maps to the Rollout's canary steps
 

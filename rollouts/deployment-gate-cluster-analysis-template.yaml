@@ -45,6 +45,25 @@
 #     health checks). Not set here - see the annotated example in
 #     rollouts/deployment-gates-guide.md for the syntax if your service needs it.
 #
+# Rule type `monitor` (verified against https://docs.datadoghq.com/deployment_gates/setup/jit/
+# "Rule types" -> "Monitor" tab, fetched 2026-07-06): evaluates the state of a set of
+# EXISTING Datadog Monitors matched by a Monitor Search `query` (not a `monitor_id` -
+# there is no such field for this rule type). Fails if, at any point during `duration`
+# seconds: no monitors match the query, more than 50 match, or any matching monitor is
+# in ALERT or NO_DATA state. Unlike faulty_deployment_detection, this rule type DOES
+# require a pre-existing Monitor object - see terraform/monitor.tf, which creates
+# `datadog_monitor.discounts_error_rate` (a real, deterministic metric-threshold
+# monitor on store-discounts' error rate, independent of Watchdog's own ML-based
+# confidence scoring). `query` here (`tag:"gate:discounts-error-rate"`) matches that
+# monitor's own static `gate:discounts-error-rate` tag - verified live via
+# `GET /api/v1/monitor/search?query=tag:"gate:discounts-error-rate"` returning exactly
+# that one monitor. See rollouts/deployment-gates-guide.md for why this rule was added
+# and the full rationale.
+#
+# Both rules must PASS for the gate to pass (`rules` semantics are AND, not OR/ANY -
+# per the JIT docs' "Configuration" section: "All rules must pass for the gate to
+# pass.").
+#
 # Prereq secret in the storedog namespace (never commit real keys):
 #   kubectl -n storedog create secret generic datadog-ci-keys \
 #     --from-literal DD_API_KEY="$DD_API_KEY" --from-literal DD_APP_KEY="$DD_APP_KEY"
@@ -65,6 +84,14 @@ data:
           "name": "APM Faulty Deployment Detection - discounts",
           "options": {
             "duration": 900
+          }
+        },
+        {
+          "type": "monitor",
+          "name": "store-discounts error rate monitor",
+          "options": {
+            "query": "tag:\"gate:discounts-error-rate\"",
+            "duration": 300
           }
         }
       ]

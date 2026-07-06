@@ -33,7 +33,7 @@ point it at your own project.
 
 | Path | Purpose |
 |---|---|
-| `terraform/` | Ephemeral GKE cluster (Standard, private nodes, DNS control-plane endpoint, no firewall rules). |
+| `terraform/` | Ephemeral GKE cluster (Standard, private nodes, DNS control-plane endpoint, no firewall rules) + a persistent, cluster-independent `datadog_monitor` backing the gate's `monitor` rule (see `terraform/monitor.tf`). |
 | `k8s-manifests/` | storedog app manifests (namespace, Datadog agent, configmaps, secret *examples*, deployments, statefulsets). See its own [README](k8s-manifests/README.md) for the compose→K8s mapping. |
 | `rollouts/` | The `discounts` service as an Argo `Rollout` (canary) + the Deployment Gate `ClusterAnalysisTemplate` (JIT `faulty_deployment_detection`) - see [`rollouts/deployment-gates-guide.md`](rollouts/deployment-gates-guide.md). |
 | `argocd/` | Two ArgoCD `Application` manifests + install notes. |
