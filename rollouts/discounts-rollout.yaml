@@ -18,7 +18,7 @@ metadata:
     team: discounts
     tags.datadoghq.com/service: store-discounts
     tags.datadoghq.com/env: demo
-    tags.datadoghq.com/version: "good-20260706170746"
+    tags.datadoghq.com/version: "good-20260706171447"
 spec:
   replicas: 3
   revisionHistoryLimit: 3
@@ -63,7 +63,7 @@ spec:
         team: discounts
         tags.datadoghq.com/service: store-discounts
         tags.datadoghq.com/env: demo
-        tags.datadoghq.com/version: "good-20260706170746"
+        tags.datadoghq.com/version: "good-20260706171447"
       annotations:
         ad.datadoghq.com/discounts.logs: '[{"source": "python"}]'
     spec:
@@ -108,7 +108,7 @@ spec:
             - name: DD_SERVICE
               value: store-discounts
             - name: DD_VERSION
-              value: "good-20260706170746"
+              value: "good-20260706171447"
             - name: DD_RUNTIME_METRICS_ENABLED
               value: "true"
             - name: DD_PROFILING_ENABLED
