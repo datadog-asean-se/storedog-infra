@@ -28,7 +28,14 @@ spec:
   strategy:
     canary:
       steps:
-        - setWeight: 25
+        # 50% (not the more typical 25%) specifically so the Deployment Gate's
+        # `monitor` rule (terraform/monitor.tf) gets a strong enough signal: that
+        # rule's query aggregates errors/hits across BOTH stable and canary pods
+        # (scoped by `service`, not `version`), so the monitor only ever sees
+        # canary_weight x FAULT_ERROR_RATE, not the raw fault rate. See the
+        # dilution-math gotcha in rollouts/deployment-gates-guide.md and the
+        # comment in buggy-image/Dockerfile for the full arithmetic.
+        - setWeight: 50
         - pause: { duration: 60 } # let APM see the new version under real traffic
         # --- Deployment Gate: APM Faulty Deployment Detection ---
         - analysis:

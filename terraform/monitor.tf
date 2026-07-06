@@ -34,31 +34,45 @@
 #     over the session -> ~0% error rate.
 #   - Buggy canary (`discounts:buggy`, 45% injected fault rate): 328 requests,
 #     228 errors -> ~70% error rate.
-# 15% critical / 8% warning sits comfortably above normal noise (0%) and well
-# below the ~70% this demo's buggy image reliably reproduces.
+#
+# IMPORTANT - dilution math (found live wiring this rule into the canary Rollout,
+# see rollouts/deployment-gates-guide.md's "Gotcha" note and
+# buggy-image/Dockerfile): this query is scoped by `service`, not `version`, so
+# it aggregates errors/hits across BOTH the healthy stable pods and the buggy
+# canary pod. At `canary_weight` traffic share, the monitor only ever sees
+# `canary_weight x FAULT_ERROR_RATE`, never the raw configured fault rate. At the
+# original 25% canary weight and 45% fault rate, the ceiling was
+# 0.25 x 0.45 = 11.25% - permanently below a 15% critical threshold no matter how
+# much traffic was generated. Fixed with TWO levers together (not just a higher
+# fault rate): the canary's `setWeight` was raised to 50%
+# (rollouts/discounts-rollout.yaml) AND the thresholds below were lowered to
+# 8% critical / 4% warning. At 50% canary weight and the current
+# FAULT_ERROR_RATE=0.90 (buggy-image/Dockerfile), the expected aggregate is
+# 0.50 x 0.90 = 45% - clears the 8% critical threshold with very large margin
+# (>5x), comfortably above normal noise (0%) on the healthy baseline.
 resource "datadog_monitor" "discounts_error_rate" {
   name    = "[storedog-adlc-demo] store-discounts error rate"
   type    = "metric alert"
   message = <<-EOT
     {{#is_alert}}
-    `store-discounts` error rate is above 15% over the last 5 minutes - likely the
+    `store-discounts` error rate is above 8% over the last 5 minutes - likely the
     injected fault in the storedog-infra Deployment Gate demo's `:buggy` discounts
     image (see buggy-image/ in datadog-asean-se/storedog-infra), or a real
     regression if you're not running that demo.
     {{/is_alert}}
     {{#is_recovery}}
-    `store-discounts` error rate is back under 8%.
+    `store-discounts` error rate is back under 4%.
     {{/is_recovery}}
   EOT
 
   # Ratio of error count to total request count over a trailing 5-minute window,
   # as a percentage. `.as_count()` is required on these APM hit/error metrics
   # (rate-type metrics) before they can be used in an arithmetic formula.
-  query = "sum(last_5m):( sum:trace.flask.request.errors{service:store-discounts}.as_count() / sum:trace.flask.request.hits{service:store-discounts}.as_count() ) * 100 > 15"
+  query = "sum(last_5m):( sum:trace.flask.request.errors{service:store-discounts}.as_count() / sum:trace.flask.request.hits{service:store-discounts}.as_count() ) * 100 > 8"
 
   monitor_thresholds {
-    critical = "15"
-    warning  = "8"
+    critical = "8"
+    warning  = "4"
   }
 
   # This demo's traffic (fake-traffic/puppeteer.yaml + scripts/generate-discount-load.sh)
